@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Environment variables
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Database
+*.db
+*.db.backup*
+*.sqlite3
+
+# Logs
+logs/
+*.log
+
+# Uploads
+uploads/
+
+# Migrations
+migrations/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo 

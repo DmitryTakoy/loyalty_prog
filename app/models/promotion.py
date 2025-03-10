@@ -21,6 +21,10 @@ class Promotion(db.Model):
     activation_count = db.Column(db.Integer, default=0)
     remaining_uses = db.Column(db.Integer)  # оставшиеся использования
     is_active = db.Column(db.Boolean, default=True)
+    
+    # Поля для мягкого удаления
+    is_deleted = db.Column(db.Boolean, default=False)
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
     # Связь с массовой генерацией (многие к одному)
     mass_generation_id = db.Column(db.Integer, db.ForeignKey('mass_generations.id'), nullable=True)
@@ -42,6 +46,18 @@ class Promotion(db.Model):
             self.remaining_uses = 1
         else:
             self.remaining_uses = None
+            
+    def soft_delete(self):
+        """Помечает промоакцию как удаленную"""
+        self.is_deleted = True
+        self.deleted_at = datetime.utcnow()
+        self.is_active = False  # Также деактивируем промоакцию
+        
+    def restore(self):
+        """Восстанавливает удаленную промоакцию"""
+        self.is_deleted = False
+        self.deleted_at = None
+        # Не меняем is_active, так как это отдельное состояние
 
 
 class PromotionMachine(db.Model):

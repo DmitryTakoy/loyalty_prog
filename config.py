@@ -41,8 +41,8 @@ class DevelopmentConfig(Config):
 
 class ProductionConfig(Config):
     DEBUG = False
-    SQLALCHEMY_DATABASE_URI = 'sqlite:////home/flaskuser/loyapro/employees.db'
-    LOG_FILE = '/home/flaskuser/loyapro/app.log'
+    SQLALCHEMY_DATABASE_URI = 'sqlite:////root/loyapro/back/data/employees.db'
+    LOG_FILE = '/root/loyapro/back/logs/app.log'
     SOCKET_PATH = '/home/flaskuser/loyapro/loyapro.sock'
 
     # Production specific settings

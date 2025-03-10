@@ -14,6 +14,10 @@ class MassGeneration(db.Model):
     expiration_date = db.Column(db.DateTime, nullable=True)
     archive_filename = db.Column(db.String(255), nullable=True)
     creation_date = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Поля для мягкого удаления
+    is_deleted = db.Column(db.Boolean, default=False)
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
     # Связь с Promotion (One MassGeneration -> Many Promotions)
     promotions = db.relationship('Promotion', back_populates='mass_generation')
@@ -24,3 +28,23 @@ class MassGeneration(db.Model):
     # Добавить связь с пользователем
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     user = db.relationship('User', backref=db.backref('mass_generations', lazy=True))
+    
+    def soft_delete(self):
+        """Помечает массовую генерацию как удаленную"""
+        self.is_deleted = True
+        self.deleted_at = datetime.utcnow()
+        
+        # Также помечаем как удаленные все связанные промоакции
+        for promotion in self.promotions:
+            if not promotion.is_deleted:
+                promotion.soft_delete()
+        
+    def restore(self):
+        """Восстанавливает удаленную массовую генерацию"""
+        self.is_deleted = False
+        self.deleted_at = None
+        
+        # Восстанавливаем все связанные промоакции
+        for promotion in self.promotions:
+            if promotion.is_deleted:
+                promotion.restore()

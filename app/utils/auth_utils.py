@@ -208,7 +208,7 @@ def verify_vending_machines(api_key, user_id):
                         ]
                     }
                     # Сохраняем в кэш
-                    cache.set(cache_key, result, timeout=300)  # Можете указать другой таймаут
+                    cache.set(cache_key, result, timeout=60)  # Кэш на 1 минуту вместо 5 минут
                     return result
                 else:
                     return {

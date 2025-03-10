@@ -15,8 +15,8 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.header import Header
 from email.utils import formataddr
-from flask_jwt_extended import create_access_token
-from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_jwt_extended import create_access_token, create_refresh_token
+from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 
 
 EMAIL_SENDER = "efimdima@ya.ru"
@@ -105,7 +105,7 @@ def register():
 
 def send_verification_email(recipient_email, token):
     try:
-        verification_url = f"http://localhost:3000/verify-email?token={token}"
+        verification_url = f"http://91.236.196.187/verify-email?token={token}"
         
         html = f"""
         <html>
@@ -140,7 +140,7 @@ def send_verification_email(recipient_email, token):
                 <p style="text-align: center;">
                   <a href="{verification_url}" class="button">Подтвердить email</a>
                 </p>
-                <p>Или перейдите по ссылке:</p>
+                <p>Или перейдите по ссылке YO:</p>
                 <p><a href="{verification_url}">{verification_url}</a></p>
                 <p>Если вы не регистрировались в системе SmartVend Loyalty, просто проигнорируйте это письмо.</p>
               </div>
@@ -189,19 +189,100 @@ def login():
         if not user or not user.check_password(data['password']):
             return jsonify({'error': 'Invalid email or password'}), 401
 
-        access_token = create_access_token(identity=user.id)
+        # Check if extended session is requested
+        extended_session = data.get('extended_session', False)
+        
+        # Create access token with appropriate expiration
+        expires_delta = timedelta(days=7) if extended_session else timedelta(hours=1)
+        access_token = create_access_token(
+            identity=user.id,
+            expires_delta=expires_delta
+        )
+        
+        # Create refresh token with longer expiration
+        refresh_token = create_refresh_token(
+            identity=user.id,
+            expires_delta=timedelta(days=30)  # 30 days for refresh token
+        )
+
+        # Update last login time
+        user.last_login = datetime.utcnow()
+        db.session.commit()
         
         return jsonify({
             'token': access_token,
+            'refresh_token': refresh_token,
             'user': {
                 'email': user.email,
                 'api_key': user.api_key,
-                'user_id': user.user_id
+                'user_id': user.user_id,
+                'first_name': user.first_name,
+                'last_name': user.last_name,
+                'phone': user.phone,
+                'company': user.company,
+                'settings': user.settings
             }
         }), 200
 
     except Exception as e:
         current_app.logger.error(f"Login error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@auth_bp.route('/refresh', methods=['POST'])
+def refresh():
+    try:
+        data = request.get_json()
+        if not data or 'refresh_token' not in data:
+            return jsonify({'error': 'Refresh token is required'}), 400
+
+        # Verify the refresh token
+        try:
+            # Get user ID from refresh token
+            user_id = get_jwt_identity()
+            user = User.query.get(user_id)
+            
+            if not user:
+                return jsonify({'error': 'User not found'}), 404
+
+            # Create new access token
+            new_access_token = create_access_token(
+                identity=user.id,
+                expires_delta=timedelta(days=7)  # Extended session by default for refreshed tokens
+            )
+            
+            # Create new refresh token
+            new_refresh_token = create_refresh_token(
+                identity=user.id,
+                expires_delta=timedelta(days=30)
+            )
+
+            return jsonify({
+                'token': new_access_token,
+                'refresh_token': new_refresh_token
+            }), 200
+
+        except Exception as e:
+            current_app.logger.error(f"Token refresh error: {str(e)}")
+            return jsonify({'error': 'Invalid refresh token'}), 401
+
+    except Exception as e:
+        current_app.logger.error(f"Refresh error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@auth_bp.route('/logout', methods=['POST'])
+@jwt_required()
+def logout():
+    try:
+        # Get the JWT ID from the token
+        jti = get_jwt()['jti']
+        
+        # You might want to add the token to a blacklist here
+        # This would prevent the token from being used even if it hasn't expired
+        # blacklist_token(jti)
+        
+        return jsonify({'message': 'Successfully logged out'}), 200
+    except Exception as e:
+        current_app.logger.error(f"Logout error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @auth_bp.route("/verify-email", methods=["GET"])
@@ -394,6 +475,12 @@ def get_user():
             'email_verified': user.email_verified,
             'api_key': user.api_key,
             'user_id': user.user_id,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'phone': user.phone,
+            'company': user.company,
+            'settings': user.settings,
+            'avatar_icon': user.avatar_icon,
             'created_at': user.created_at.isoformat() if user.created_at else None,
             'last_login': user.last_login.isoformat() if user.last_login else None
         }), 200
@@ -425,17 +512,25 @@ def update_user():
             user.company = data['company']
         if 'settings' in data:
             user.settings = data['settings']
+        if 'avatar_icon' in data:
+            user.avatar_icon = data['avatar_icon']
             
         db.session.commit()
         
         return jsonify({
             'id': user.id,
             'email': user.email,
-            'first_name': user.first_name if hasattr(user, 'first_name') else None,
-            'last_name': user.last_name if hasattr(user, 'last_name') else None,
-            'phone': user.phone if hasattr(user, 'phone') else None,
-            'company': user.company if hasattr(user, 'company') else None,
-            'settings': user.settings if hasattr(user, 'settings') else None
+            'email_verified': user.email_verified,
+            'api_key': user.api_key,
+            'user_id': user.user_id,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'phone': user.phone,
+            'company': user.company,
+            'settings': user.settings,
+            'avatar_icon': user.avatar_icon,
+            'created_at': user.created_at.isoformat() if user.created_at else None,
+            'last_login': user.last_login.isoformat() if user.last_login else None
         }), 200
         
     except Exception as e:

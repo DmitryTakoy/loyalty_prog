@@ -15,6 +15,7 @@ class User(db.Model):
     verification_token = db.Column(db.String(100), unique=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_login = db.Column(db.DateTime)
+    avatar_icon = db.Column(db.String(50), default='account_circle')
     
     # Additional fields for user profile
     first_name = db.Column(db.String(100))
@@ -40,6 +41,7 @@ class UserMachine(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     serialNumber = db.Column(db.String(50), nullable=False)
     humanName = db.Column(db.String(255), default="Unknown")
+    is_deleted = db.Column(db.Boolean, default=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     # Если нужно, чтобы user мог иметь отношение:
