@@ -10,7 +10,7 @@ class Promotion(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(255), nullable=False)
     
-    discount_type = db.Column(db.String(50), nullable=False)  # 'percentage' или 'free_drinks'
+    discount_type = db.Column(db.String(50), nullable=False)  # 'percentage', 'free_drink', or 'free_drinks'
     discount_value = db.Column(db.Integer, default=0)
     drinks_limit = db.Column(db.Integer)  # количество напитков (если нужно)
     is_renewable = db.Column(db.Boolean, default=False)
@@ -40,8 +40,15 @@ class Promotion(db.Model):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if self.discount_type == 'free_drinks':
-            self.remaining_uses = self.drinks_limit
+        if self.discount_type == 'free_drinks' or self.discount_type == 'free_drink':
+            # If drinks_limit is None, set remaining_uses to 1 for single-use or None for multi-use
+            if self.drinks_limit is None:
+                if self.is_single_use:
+                    self.remaining_uses = 1
+                else:
+                    self.remaining_uses = None
+            else:
+                self.remaining_uses = self.drinks_limit
         elif self.is_single_use:
             self.remaining_uses = 1
         else:

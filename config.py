@@ -39,6 +39,19 @@ class DevelopmentConfig(Config):
     SITE_URL = 'http://localhost:3000'
     PARENT_SERVICE_URL = 'http://localhost:8000'  # URL родительского сервиса для разработки
 
+class TestingConfig(Config):
+    TESTING = True
+    DEBUG = True
+    SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'  # Используем базу данных в памяти для тестов
+    LOG_FILE = str(Config.BASE_DIR / 'logs' / 'app_test.log')
+    
+    # Отключаем CSRF для тестов
+    WTF_CSRF_ENABLED = False
+    
+    # Тестовые настройки
+    ENV = 'testing'
+    CORS_ORIGINS = ['http://localhost:3000', 'http://127.0.0.1:3000']
+
 class ProductionConfig(Config):
     DEBUG = False
     SQLALCHEMY_DATABASE_URI = 'sqlite:////root/loyapro/back/data/employees.db'
@@ -52,5 +65,6 @@ class ProductionConfig(Config):
 config = {
     'development': DevelopmentConfig,
     'production': ProductionConfig,
+    'testing': TestingConfig,
     'default': DevelopmentConfig
 }

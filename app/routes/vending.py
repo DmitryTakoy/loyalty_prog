@@ -2,6 +2,7 @@ from flask import Blueprint, jsonify, request, current_app
 from app.models.promotion import Promotion, PromotionMachine
 from app.models.transaction import Transaction
 from datetime import datetime
+from app import db
 
 # Create a blueprint specifically for vending machines without a prefix
 vending_bp = Blueprint('vending', __name__)
@@ -66,7 +67,7 @@ def handle_request():
     if promo.discount_type == 'percentage':
         current_app.logger.info(f"Returning percentage discount {promo.discount_value} for promotion {promo.id}, machine {machine}")
         return jsonify({"discount": promo.discount_value}), 200
-    elif promo.discount_type == 'free_drinks':
+    elif promo.discount_type == 'free_drinks' or promo.discount_type == 'free_drink':
         current_app.logger.info(f"Returning free drink (100% discount) for promotion {promo.id}, machine {machine}")
         return jsonify({"discount": 100}), 200
     else:
@@ -75,69 +76,83 @@ def handle_request():
 
 @vending_bp.route('/completion', methods=['POST'])
 def handle_completion():
-    data = request.get_json()
-    customer_id = data.get('customer')
-    machine = data.get('machine')
-    success = data.get('success', False)
-    
-    # Log completion request
-    current_app.logger.info(f"Received completion request from machine: {machine}, customer_id: {customer_id}, success: {success}")
-    current_app.logger.info(f"Full completion data: {data}")
+    try:
+        data = request.get_json()
+        if not data:
+            current_app.logger.warning("No JSON data in completion request")
+            return jsonify({"error": "Invalid JSON data"}), 400
+            
+        customer_id = data.get('customer')
+        machine = data.get('machine')
+        success = data.get('success', False)
+        
+        # Log completion request
+        current_app.logger.info(f"Received completion request from machine: {machine}, customer_id: {customer_id}, success: {success}")
+        current_app.logger.info(f"Full completion data: {data}")
 
-    if not customer_id or not machine:
-        current_app.logger.warning(f"Missing customer or machine in completion request: {data}")
-        return jsonify({"error": "Missing customer or machine"}), 400
+        if not customer_id or not machine:
+            current_app.logger.warning(f"Missing customer or machine in completion request: {data}")
+            return jsonify({"error": "Missing customer or machine"}), 400
 
-    promo = Promotion.query.filter_by(customer_id=customer_id).first()
-    if not promo:
-        current_app.logger.info(f"No promotion found for customer_id: {customer_id} in completion request")
-        return jsonify({"message": "No such promotion"}), 200
+        promo = Promotion.query.filter_by(customer_id=customer_id).first()
+        if not promo:
+            current_app.logger.info(f"No promotion found for customer_id: {customer_id} in completion request")
+            return jsonify({"message": "No such promotion"}), 200
 
-    # Проверяем machine
-    pm = PromotionMachine.query.filter_by(
-        promotion_id=promo.id,
-        serialNumber=machine
-    ).first()
-    if not pm:
-        # Акция не распространяется на этот автомат - но раз уж success, ничего не делаем
-        current_app.logger.info(f"Promotion {promo.id} not valid for machine {machine} in completion request")
-        return jsonify({"message": "Promotion not valid for this machine"}), 200
+        # Проверяем machine
+        pm = PromotionMachine.query.filter_by(
+            promotion_id=promo.id,
+            serialNumber=machine
+        ).first()
+        if not pm:
+            # Акция не распространяется на этот автомат - но раз уж success, ничего не делаем
+            current_app.logger.info(f"Promotion {promo.id} not valid for machine {machine} in completion request")
+            return jsonify({"message": "Promotion not valid for this machine"}), 200
 
-    if success:
-        # Обновляем акцию
-        if promo.discount_type == 'percentage':
-            if promo.is_single_use:
-                promo.is_used = True
-        elif promo.discount_type == 'free_drinks':
-            if promo.remaining_uses is not None and promo.remaining_uses > 0:
-                promo.remaining_uses -= 1
-                if promo.remaining_uses <= 0:
+        if success:
+            # Обновляем акцию
+            if promo.discount_type == 'percentage':
+                if promo.is_single_use:
                     promo.is_used = True
-        promo.activation_count += 1
-    else:
-        # Если неуспешная выдача, можно ничего не делать или логгировать
-        pass
-
-    # Логируем транзакцию
-    trans = Transaction(
-        promotion_id=promo.id,
-        machine_id=machine,
-        product_id=data.get('product'),
-        price=data.get('price'),
-        discounted_price=data.get('price'),
-    )
-    # Если нужна timestamp
-    unixtime_hex = data.get('unixtime')
-    if unixtime_hex:
-        try:
-            ts = int(unixtime_hex, 16)
-            trans.timestamp = datetime.utcfromtimestamp(ts)
-        except:
+            elif promo.discount_type == 'free_drinks' or promo.discount_type == 'free_drink':
+                if promo.remaining_uses is not None and promo.remaining_uses > 0:
+                    promo.remaining_uses -= 1
+                    if promo.remaining_uses <= 0:
+                        promo.is_used = True
+                # Если это одноразовая акция free_drink, то помечаем как использованную
+                elif promo.is_single_use:
+                    promo.is_used = True
+                # Если remaining_uses is None и это одноразовая акция, помечаем как использованную
+                elif promo.remaining_uses is None and promo.is_single_use:
+                    promo.is_used = True
+            promo.activation_count += 1
+        else:
+            # Если неуспешная выдача, можно ничего не делать или логгировать
             pass
-    
-    db = current_app.extensions['sqlalchemy'].db
-    db.session.add(trans)
-    db.session.commit()
-    
-    current_app.logger.info(f"Completed transaction for promotion {promo.id}, machine {machine}")
-    return jsonify({"message": "Transaction completed"}), 200 
+
+        # Логируем транзакцию
+        trans = Transaction(
+            user_id=promo.user_id,
+            machine_id=machine,
+            product_id=data.get('product'),
+            price=data.get('price'),
+            discounted_price=data.get('price'),
+        )
+        # Если нужна timestamp
+        unixtime_hex = data.get('unixtime')
+        if unixtime_hex:
+            try:
+                ts = int(unixtime_hex, 16)
+                trans.timestamp = datetime.utcfromtimestamp(ts)
+            except Exception as e:
+                current_app.logger.warning(f"Failed to parse unixtime: {unixtime_hex}, error: {str(e)}")
+                # Continue without setting timestamp - it will use default
+        
+        db.session.add(trans)
+        db.session.commit()
+        
+        current_app.logger.info(f"Completed transaction for promotion {promo.id}, machine {machine}")
+        return jsonify({"message": "Transaction completed"}), 200
+    except Exception as e:
+        current_app.logger.error(f"Error processing completion request: {str(e)}")
+        return jsonify({"error": f"Internal server error: {str(e)}"}), 500 
