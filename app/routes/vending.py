@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify, request, current_app
 from app.models.promotion import Promotion, PromotionMachine
 from app.models.transaction import Transaction
-from datetime import datetime
+from datetime import datetime, timedelta
 from app import db
 
 # Create a blueprint specifically for vending machines without a prefix
@@ -40,14 +40,24 @@ def handle_request():
     if not promo.is_active:
         current_app.logger.info(f"Promotion {promo.id} is not active")
         return jsonify({}), 200
-    if promo.is_used:
+        
+    # Для безлимитных акций не проверяем is_used
+    if promo.is_single_use and promo.is_used:
         # Одноразовая уже использована
         current_app.logger.info(f"One-time promotion {promo.id} already used")
         return jsonify({}), 200
+        
     if promo.expiration_date and promo.expiration_date < now:
-        # истекла
-        current_app.logger.info(f"Promotion {promo.id} expired on {promo.expiration_date}")
-        return jsonify({}), 200
+        # Проверяем, можно ли продлить акцию
+        if promo.is_renewable:
+            # Продлеваем на месяц
+            promo.expiration_date = now + timedelta(days=30)
+            current_app.logger.info(f"Renewed promotion {promo.id} until {promo.expiration_date}")
+        else:
+            # истекла
+            current_app.logger.info(f"Promotion {promo.id} expired on {promo.expiration_date}")
+            return jsonify({}), 200
+            
     if promo.remaining_uses is not None and promo.remaining_uses <= 0:
         # уже исчерпана
         current_app.logger.info(f"Promotion {promo.id} has no remaining uses")
@@ -114,17 +124,36 @@ def handle_completion():
             if promo.discount_type == 'percentage':
                 if promo.is_single_use:
                     promo.is_used = True
+                    promo.is_active = False  # Деактивируем одноразовую акцию после использования
+                # Для многоразовых акций percentage также обновляем статус
+                elif promo.remaining_uses is not None and promo.remaining_uses > 0:
+                    promo.remaining_uses -= 1
+                    if promo.remaining_uses <= 0:
+                        promo.is_used = True
+                        promo.is_active = False
+                # Для безлимитных акций просто увеличиваем счетчик активаций
+                elif promo.remaining_uses is None and not promo.is_single_use:
+                    # Не помечаем как used, только увеличиваем счетчик
+                    pass
             elif promo.discount_type == 'free_drinks' or promo.discount_type == 'free_drink':
                 if promo.remaining_uses is not None and promo.remaining_uses > 0:
                     promo.remaining_uses -= 1
                     if promo.remaining_uses <= 0:
                         promo.is_used = True
+                        promo.is_active = False
                 # Если это одноразовая акция free_drink, то помечаем как использованную
                 elif promo.is_single_use:
                     promo.is_used = True
+                    promo.is_active = False
                 # Если remaining_uses is None и это одноразовая акция, помечаем как использованную
                 elif promo.remaining_uses is None and promo.is_single_use:
                     promo.is_used = True
+                    promo.is_active = False
+                # Если это многоразовая акция free_drink без ограничения на количество использований,
+                # просто увеличиваем счетчик активаций
+                elif promo.remaining_uses is None and not promo.is_single_use:
+                    # Не помечаем как used, только увеличиваем счетчик
+                    pass
             promo.activation_count += 1
         else:
             # Если неуспешная выдача, можно ничего не делать или логгировать

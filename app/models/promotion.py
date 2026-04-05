@@ -38,17 +38,39 @@ class Promotion(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     user = db.relationship('User', backref=db.backref('promotions', lazy=True))
 
+    @property
+    def is_expired(self):
+        """Проверяет, истек ли срок действия акции"""
+        if self.expiration_date is None:
+            return False
+        return datetime.utcnow() > self.expiration_date
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if self.discount_type == 'free_drinks' or self.discount_type == 'free_drink':
-            # If drinks_limit is None, set remaining_uses to 1 for single-use or None for multi-use
+            # If drinks_limit is None, use discount_value as the limit for free_drink promotions
             if self.drinks_limit is None:
-                if self.is_single_use:
+                if self.discount_value and self.discount_value > 0:
+                    # Use discount_value as the number of drinks
+                    self.drinks_limit = self.discount_value
+                    self.remaining_uses = self.discount_value
+                elif self.is_single_use:
                     self.remaining_uses = 1
                 else:
                     self.remaining_uses = None
             else:
                 self.remaining_uses = self.drinks_limit
+        elif self.discount_type == 'percentage':
+            # Для акций типа percentage также устанавливаем remaining_uses
+            if self.is_single_use:
+                self.remaining_uses = 1
+            else:
+                # Для многоразовых акций percentage можно установить лимит использований
+                # через drinks_limit (хотя название не совсем подходит)
+                if self.drinks_limit is not None:
+                    self.remaining_uses = self.drinks_limit
+                else:
+                    self.remaining_uses = None
         elif self.is_single_use:
             self.remaining_uses = 1
         else:

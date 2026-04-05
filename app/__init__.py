@@ -146,6 +146,10 @@ def create_app(config_name='default'):
         app.register_blueprint(main, url_prefix='/api')
         app.register_blueprint(vending_bp)  # Register without prefix for vending machines
         
+        # Register CLI commands
+        from app.cli import init_app as init_cli
+        init_cli(app)
+        
         db.create_all()
     
     return app

@@ -1,6 +1,12 @@
 from app import create_app
+import os
+import sys
 
-app = create_app('development')
+# Use production configuration for command-line commands like flask check-expired-promotions
+if len(sys.argv) > 1 and 'flask' in sys.argv[0]:
+    app = create_app('production')
+else:
+    app = create_app('development')
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
