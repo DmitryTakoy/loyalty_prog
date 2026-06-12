@@ -19,6 +19,7 @@ class Promotion(db.Model):
     is_used = db.Column(db.Boolean, default=False)
     creation_date = db.Column(db.DateTime, default=datetime.utcnow)
     activation_count = db.Column(db.Integer, default=0)
+    last_used_at = db.Column(db.DateTime, nullable=True)  # время последнего успешного использования QR
     remaining_uses = db.Column(db.Integer)  # оставшиеся использования
     is_active = db.Column(db.Boolean, default=True)
     

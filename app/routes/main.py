@@ -150,6 +150,7 @@ def get_mass_generations():
                 'name': mg.name,
                 'discount_type': mg.discount_type,
                 'discount_value': mg.discount_value,
+                'drinks_limit': mg.drinks_limit,
                 'is_single_use': mg.is_single_use,
                 'is_renewable': mg.is_renewable,
                 'expiration_date': mg.expiration_date.isoformat() if mg.expiration_date else None,
@@ -223,6 +224,13 @@ def generate_codes():
         num_codes = data.get('num_codes', 1)
         discount_type = data.get('discount_type', 'percentage')
         discount_value = data.get('discount_value', 0)
+        drinks_limit_raw = data.get('drinks_limit', None)
+        try:
+            drinks_limit = int(drinks_limit_raw) if drinks_limit_raw not in (None, '') else None
+        except (TypeError, ValueError):
+            return jsonify({"error": "drinks_limit must be an integer"}), 400
+        if drinks_limit is not None and drinks_limit < 1:
+            return jsonify({"error": "drinks_limit must be a positive integer"}), 400
         is_single_use = data.get('is_single_use', True)
         is_renewable = data.get('is_renewable', False)
         expiration_date_str = data.get('expiration_date', None)
@@ -242,6 +250,7 @@ def generate_codes():
             name=name,
             discount_type=discount_type,
             discount_value=discount_value,
+            drinks_limit=drinks_limit,
             is_single_use=is_single_use,
             is_renewable=is_renewable,
             expiration_date=expiration_date,
@@ -284,13 +293,13 @@ def generate_codes():
                     name=name,
                     discount_type=discount_type,
                     discount_value=discount_value,
+                    drinks_limit=drinks_limit,
                     is_single_use=is_single_use,
                     is_renewable=is_renewable,
                     expiration_date=expiration_date,
                     creation_date=datetime.utcnow(),
                     is_active=True,
                     activation_count=0,
-                    remaining_uses=None,  # Можно логически рассчитать, если нужно
                     mass_generation_id=mass_generation.id,
                     customer_id=code,
                     user_id=get_jwt_identity()  # берем user_id из JWT
@@ -368,6 +377,14 @@ def _generate_codes_job(app_obj, mg_id: int, payload: dict, user_id: int):
             num_codes = payload.get('num_codes', 1)
             discount_type = payload.get('discount_type', 'percentage')
             discount_value = payload.get('discount_value', 0)
+            drinks_limit_raw = payload.get('drinks_limit', None)
+            if drinks_limit_raw in (None, ''):
+                drinks_limit = None
+            else:
+                try:
+                    drinks_limit = int(drinks_limit_raw)
+                except (TypeError, ValueError):
+                    raise ValueError('drinks_limit must be an integer')
             is_single_use = payload.get('is_single_use', True)
             is_renewable = payload.get('is_renewable', False)
             expiration_date_str = payload.get('expiration_date', None)
@@ -410,13 +427,13 @@ def _generate_codes_job(app_obj, mg_id: int, payload: dict, user_id: int):
                         name=mg.name,
                         discount_type=discount_type,
                         discount_value=discount_value,
+                        drinks_limit=drinks_limit,
                         is_single_use=is_single_use,
                         is_renewable=is_renewable,
                         expiration_date=expiration_date,
                         creation_date=datetime.utcnow(),
                         is_active=True,
                         activation_count=0,
-                        remaining_uses=None,
                         mass_generation_id=mg.id,
                         customer_id=code,
                         user_id=user_id
@@ -477,6 +494,13 @@ def generate_codes_async():
         name = data.get('name', 'MassGeneratedPromo')
         discount_type = data.get('discount_type', 'percentage')
         discount_value = data.get('discount_value', 0)
+        drinks_limit_raw = data.get('drinks_limit', None)
+        try:
+            drinks_limit = int(drinks_limit_raw) if drinks_limit_raw not in (None, '') else None
+        except (TypeError, ValueError):
+            return jsonify({'error': 'drinks_limit must be an integer'}), 400
+        if drinks_limit is not None and drinks_limit < 1:
+            return jsonify({'error': 'drinks_limit must be a positive integer'}), 400
         is_single_use = data.get('is_single_use', True)
         is_renewable = data.get('is_renewable', False)
         expiration_date_str = data.get('expiration_date')
@@ -486,6 +510,7 @@ def generate_codes_async():
             name=name,
             discount_type=discount_type,
             discount_value=discount_value,
+            drinks_limit=drinks_limit,
             is_single_use=is_single_use,
             is_renewable=is_renewable,
             expiration_date=expiration_date,
@@ -725,7 +750,9 @@ def get_machines_list():
                 )
                 .filter(
                     Transaction.user_id == user.id,
-                    Transaction.discounted_price < Transaction.price
+                    # Успешные активации QR. Старый фильтр discounted_price < price
+                    # никогда не срабатывал, т.к. /completion пишет их равными.
+                    Transaction.success == True
                 )
                 .group_by(Transaction.machine_id)
                 .all()
@@ -771,6 +798,56 @@ def get_promotion_machines(promotion_id):
     ]), 200
 
 
+@main.route('/promotion/<int:promotion_id>/usages', methods=['GET'])
+@jwt_required()
+def get_promotion_usages(promotion_id):
+    """История использований QR-кода: время и автомат для каждой активации."""
+    try:
+        user_id = get_jwt_identity()
+        promo = Promotion.query.get(promotion_id)
+        if not promo or str(promo.user_id) != str(user_id):
+            return jsonify({"error": "Promotion not found"}), 404
+
+        limit = request.args.get('limit', 100, type=int)
+        limit = max(1, min(limit, 500))
+
+        usages = (
+            Transaction.query
+            .filter(
+                Transaction.promotion_id == promotion_id,
+                Transaction.success == True
+            )
+            .order_by(Transaction.timestamp.desc())
+            .limit(limit)
+            .all()
+        )
+
+        # Имена автоматов для отображения
+        serials = {u.machine_id for u in usages}
+        names = {}
+        if serials:
+            rows = UserMachine.query.filter(
+                UserMachine.user_id == promo.user_id,
+                UserMachine.serialNumber.in_(list(serials))
+            ).all()
+            names = {m.serialNumber: m.humanName for m in rows}
+
+        return jsonify({
+            "promotion_id": promo.id,
+            "promotion_name": promo.name,
+            "activation_count": promo.activation_count,
+            "last_used_at": promo.last_used_at.isoformat() if promo.last_used_at else None,
+            "usages": [{
+                "timestamp": u.timestamp.isoformat() if u.timestamp else None,
+                "machine_serial": u.machine_id,
+                "machine_name": names.get(u.machine_id, u.machine_id),
+            } for u in usages]
+        }), 200
+    except Exception as e:
+        current_app.logger.error(f"Error fetching promotion usages: {str(e)}")
+        return jsonify({"error": "Failed to fetch promotion usages"}), 500
+
+
 promotions_store = []  # список в памяти, пока без БД
 
 @main.route('/create_promotion', methods=['POST'])
@@ -793,7 +870,12 @@ def create_promotion():
     # drinks_limit carries the N-use cap for both free_drinks AND percentage types.
     # The frontend sends it only when the operator explicitly sets a use limit.
     drinks_limit_raw = data.get("drinks_limit", None)
-    drinks_limit = int(drinks_limit_raw) if drinks_limit_raw is not None else None
+    try:
+        drinks_limit = int(drinks_limit_raw) if drinks_limit_raw not in (None, '') else None
+    except (TypeError, ValueError):
+        return jsonify({"error": "drinks_limit must be an integer"}), 400
+    if drinks_limit is not None and drinks_limit < 1:
+        return jsonify({"error": "drinks_limit must be a positive integer"}), 400
     customer_id = generate_unique_code()
 
     expiration_date = None
@@ -919,6 +1001,7 @@ def get_promotions():
             'activation_count', 'remaining_uses',
             'is_active',
             'mass_generation_id',
+            'last_used_at',
         ]
         sort_by = request.args.get('sort_by', 'id')
         sort_dir = request.args.get('sort_dir', 'asc')
@@ -956,7 +1039,7 @@ def get_promotions():
         # Сортировка с предсказуемым порядком NULL
         base_col = getattr(Promotion, sort_by)
         order_expr = []
-        if sort_by in ['expiration_date', 'remaining_uses', 'mass_generation_id']:
+        if sort_by in ['expiration_date', 'remaining_uses', 'mass_generation_id', 'last_used_at']:
             # NULL в конец при asc, в начало при desc
             nulls_flag = case((base_col.is_(None), 1), else_=0)
             order_expr.append(nulls_flag.asc() if sort_dir == 'asc' else nulls_flag.desc())
@@ -984,10 +1067,12 @@ def get_promotions():
                 'name': p.name,
                 'discount_type': p.discount_type,
                 'discount_value': p.discount_value,
+                'drinks_limit': p.drinks_limit,
                 'expiration_date': p.expiration_date.isoformat() if p.expiration_date else None,
                 'is_single_use': p.is_single_use,
                 'is_renewable': p.is_renewable,
                 'activation_count': p.activation_count,
+                'last_used_at': p.last_used_at.isoformat() if p.last_used_at else None,
                 'remaining_uses': p.remaining_uses,
                 'is_active': p.is_active,
                 'is_deleted': p.is_deleted,

@@ -12,6 +12,13 @@ class Transaction(db.Model):
     price = db.Column(db.Integer, nullable=False)
     discounted_price = db.Column(db.Integer, nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-    
+
+    # Привязка к промокоду (nullable: старые транзакции не привязаны)
+    promotion_id = db.Column(db.Integer, db.ForeignKey('promotions.id'), nullable=True)
+    promotion = db.relationship('Promotion', backref=db.backref('transactions', lazy=True))
+
+    # Была ли успешная выдача со скидкой (nullable: для старых записей неизвестно)
+    success = db.Column(db.Boolean, nullable=True)
+
     # Добавляем связь с User
-    user = db.relationship('User', backref=db.backref('transactions', lazy=True)) 
+    user = db.relationship('User', backref=db.backref('transactions', lazy=True))

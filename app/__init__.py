@@ -10,6 +10,7 @@ import os
 from datetime import timedelta
 from logging.handlers import RotatingFileHandler
 from config import config
+from sqlalchemy import inspect, text
 
 db = SQLAlchemy()
 migrate = Migrate()
@@ -151,5 +152,36 @@ def create_app(config_name='default'):
         init_cli(app)
         
         db.create_all()
+
+        # Lightweight schema compatibility step for environments without migrations.
+        # Existing databases may miss recently added nullable columns.
+        try:
+            inspector = inspect(db.engine)
+            if 'mass_generations' in inspector.get_table_names():
+                mg_columns = {column['name'] for column in inspector.get_columns('mass_generations')}
+                if 'drinks_limit' not in mg_columns:
+                    with db.engine.begin() as connection:
+                        connection.execute(text("ALTER TABLE mass_generations ADD COLUMN drinks_limit INTEGER"))
+                    app.logger.info("Added missing column mass_generations.drinks_limit")
+
+            # Колонки для отслеживания времени использования QR-кодов
+            if 'promotions' in inspector.get_table_names():
+                promo_columns = {column['name'] for column in inspector.get_columns('promotions')}
+                if 'last_used_at' not in promo_columns:
+                    with db.engine.begin() as connection:
+                        connection.execute(text("ALTER TABLE promotions ADD COLUMN last_used_at DATETIME"))
+                    app.logger.info("Added missing column promotions.last_used_at")
+
+            if 'transactions' in inspector.get_table_names():
+                trans_columns = {column['name'] for column in inspector.get_columns('transactions')}
+                with db.engine.begin() as connection:
+                    if 'promotion_id' not in trans_columns:
+                        connection.execute(text("ALTER TABLE transactions ADD COLUMN promotion_id INTEGER REFERENCES promotions(id)"))
+                        app.logger.info("Added missing column transactions.promotion_id")
+                    if 'success' not in trans_columns:
+                        connection.execute(text("ALTER TABLE transactions ADD COLUMN success BOOLEAN"))
+                        app.logger.info("Added missing column transactions.success")
+        except Exception as schema_error:
+            app.logger.warning(f"Schema compatibility check failed: {schema_error}")
     
     return app

@@ -9,6 +9,7 @@ class MassGeneration(db.Model):
     name = db.Column(db.String(255), nullable=False)
     discount_type = db.Column(db.String(50), nullable=False)  # 'percentage', 'free_drink', or 'free_drinks'
     discount_value = db.Column(db.Integer, default=0)
+    drinks_limit = db.Column(db.Integer, nullable=True)
     is_single_use = db.Column(db.Boolean, default=False)
     is_renewable = db.Column(db.Boolean, default=False)
     expiration_date = db.Column(db.DateTime, nullable=True)

@@ -119,42 +119,83 @@ def handle_completion():
             current_app.logger.info(f"Promotion {promo.id} not valid for machine {machine} in completion request")
             return jsonify({"message": "Promotion not valid for this machine"}), 200
 
+        # Время события: unixtime от автомата (hex), иначе текущее время
+        event_time = datetime.utcnow()
+        unixtime_hex = data.get('unixtime')
+        if unixtime_hex:
+            try:
+                event_time = datetime.utcfromtimestamp(int(unixtime_hex, 16))
+            except Exception as e:
+                current_app.logger.warning(f"Failed to parse unixtime: {unixtime_hex}, error: {str(e)}")
+
+        # Применилась ли скидка фактически (для last_used_at и лога транзакции)
+        discount_applied = False
+
         if success:
-            # Обновляем акцию
-            if promo.discount_type == 'percentage':
-                if promo.is_single_use:
-                    promo.is_used = True
-                    promo.is_active = False  # Деактивируем одноразовую акцию после использования
-                # Для многоразовых акций percentage также обновляем статус
-                elif promo.remaining_uses is not None and promo.remaining_uses > 0:
-                    promo.remaining_uses -= 1
-                    if promo.remaining_uses <= 0:
+            # Вендинговый автомат присылает /completion для КАЖДОЙ успешной
+            # продажи по отсканированному QR, даже если /request вернул пустой
+            # ответ (акция уже исчерпана/неактивна/просрочена или автомат вне
+            # списка). В таких случаях реальная скидка не применялась, поэтому
+            # засчитывать это как активацию нельзя - иначе activation_count
+            # выходит за пределы drinks_limit. См. кейс с
+            # "Арлепта 100% ежемесячные ..." где USED=11/12 при лимите 10.
+            now = datetime.utcnow()
+            is_expired = (
+                promo.expiration_date is not None
+                and promo.expiration_date < now
+                and not promo.is_renewable
+            )
+            is_exhausted = (
+                promo.remaining_uses is not None and promo.remaining_uses <= 0
+            )
+            already_used = promo.is_single_use and promo.is_used
+
+            if not promo.is_active or is_expired or is_exhausted or already_used:
+                current_app.logger.info(
+                    f"Completion for promo {promo.id} arrived but discount "
+                    f"was not applied (is_active={promo.is_active}, "
+                    f"expired={is_expired}, exhausted={is_exhausted}, "
+                    f"already_used={already_used}). "
+                    f"Skipping activation_count/remaining_uses update."
+                )
+            else:
+                # Обновляем акцию
+                if promo.discount_type == 'percentage':
+                    if promo.is_single_use:
+                        promo.is_used = True
+                        promo.is_active = False  # Деактивируем одноразовую акцию после использования
+                    # Для многоразовых акций percentage также обновляем статус
+                    elif promo.remaining_uses is not None and promo.remaining_uses > 0:
+                        promo.remaining_uses -= 1
+                        if promo.remaining_uses <= 0:
+                            promo.is_used = True
+                            promo.is_active = False
+                    # Для безлимитных акций просто увеличиваем счетчик активаций
+                    elif promo.remaining_uses is None and not promo.is_single_use:
+                        # Не помечаем как used, только увеличиваем счетчик
+                        pass
+                elif promo.discount_type == 'free_drinks' or promo.discount_type == 'free_drink':
+                    if promo.remaining_uses is not None and promo.remaining_uses > 0:
+                        promo.remaining_uses -= 1
+                        if promo.remaining_uses <= 0:
+                            promo.is_used = True
+                            promo.is_active = False
+                    # Если это одноразовая акция free_drink, то помечаем как использованную
+                    elif promo.is_single_use:
                         promo.is_used = True
                         promo.is_active = False
-                # Для безлимитных акций просто увеличиваем счетчик активаций
-                elif promo.remaining_uses is None and not promo.is_single_use:
-                    # Не помечаем как used, только увеличиваем счетчик
-                    pass
-            elif promo.discount_type == 'free_drinks' or promo.discount_type == 'free_drink':
-                if promo.remaining_uses is not None and promo.remaining_uses > 0:
-                    promo.remaining_uses -= 1
-                    if promo.remaining_uses <= 0:
+                    # Если remaining_uses is None и это одноразовая акция, помечаем как использованную
+                    elif promo.remaining_uses is None and promo.is_single_use:
                         promo.is_used = True
                         promo.is_active = False
-                # Если это одноразовая акция free_drink, то помечаем как использованную
-                elif promo.is_single_use:
-                    promo.is_used = True
-                    promo.is_active = False
-                # Если remaining_uses is None и это одноразовая акция, помечаем как использованную
-                elif promo.remaining_uses is None and promo.is_single_use:
-                    promo.is_used = True
-                    promo.is_active = False
-                # Если это многоразовая акция free_drink без ограничения на количество использований,
-                # просто увеличиваем счетчик активаций
-                elif promo.remaining_uses is None and not promo.is_single_use:
-                    # Не помечаем как used, только увеличиваем счетчик
-                    pass
-            promo.activation_count += 1
+                    # Если это многоразовая акция free_drink без ограничения на количество использований,
+                    # просто увеличиваем счетчик активаций
+                    elif promo.remaining_uses is None and not promo.is_single_use:
+                        # Не помечаем как used, только увеличиваем счетчик
+                        pass
+                promo.activation_count += 1
+                promo.last_used_at = event_time
+                discount_applied = True
         else:
             # Если неуспешная выдача, можно ничего не делать или логгировать
             pass
@@ -166,17 +207,10 @@ def handle_completion():
             product_id=data.get('product'),
             price=data.get('price'),
             discounted_price=data.get('price'),
+            promotion_id=promo.id,
+            success=discount_applied,
+            timestamp=event_time,
         )
-        # Если нужна timestamp
-        unixtime_hex = data.get('unixtime')
-        if unixtime_hex:
-            try:
-                ts = int(unixtime_hex, 16)
-                trans.timestamp = datetime.utcfromtimestamp(ts)
-            except Exception as e:
-                current_app.logger.warning(f"Failed to parse unixtime: {unixtime_hex}, error: {str(e)}")
-                # Continue without setting timestamp - it will use default
-        
         db.session.add(trans)
         db.session.commit()
         
